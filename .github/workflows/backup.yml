@@ -1,0 +1,74 @@
+name: Backup programado
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # todos los días 06:00 UTC (01:00 hora de Lima)
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar cliente PostgreSQL 17
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Backup completo con pg_dump
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          STAMP=$(date -u +%Y%m%d_%H%M%S)
+          pg_dump --format=custom --no-owner --file "backup_${STAMP}.dump" "$DATABASE_URL"
+          # Cifrado: en un repo público los artefactos pueden descargarse, así que nunca se suben en claro.
+          openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_PASSPHRASE \
+            -in "backup_${STAMP}.dump" -out "backup_${STAMP}.dump.enc"
+          rm "backup_${STAMP}.dump"
+          ls -lh backup_*.enc
+
+      - name: Guardar fuera del servidor (retención 7 días)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ github.run_id }}
+          path: backup_*.dump.enc
+          retention-days: 7
+
+  verificar-restauracion:
+    needs: backup
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prueba
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-retries 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: backup-${{ github.run_id }}
+      - name: Instalar cliente PostgreSQL 17
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+      - name: Restaurar en una base limpia y comprobar
+        env:
+          PGPASSWORD: postgres
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          F=$(ls backup_*.dump.enc)
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSPHRASE -in "$F" -out restaurar.dump
+          pg_restore --no-owner -h localhost -U postgres -d prueba restaurar.dump
+          FILAS=$(psql -h localhost -U postgres -d prueba -tAc "SELECT count(*) FROM notas")
+          echo "Filas restauradas en notas: $FILAS"

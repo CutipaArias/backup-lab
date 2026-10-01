@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backup Lab · PostgreSQL</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2330; --mut:#667085; --acc:#1f6feb; --bad:#c62828; --line:#e3e7ee; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 20px; color: var(--mut); }
+  section { background: var(--card); border:1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  input { flex:1; min-width: 160px; padding: 8px 10px; border:1px solid var(--line); border-radius: 6px; font: inherit; }
+  button { padding: 8px 14px; border:0; border-radius: 6px; background: var(--acc); color:#fff; font: inherit; cursor:pointer; }
+  button.sec { background:#eef2f8; color: var(--ink); }
+  button.del { background: transparent; color: var(--bad); padding: 4px 8px; }
+  ul { list-style:none; margin:12px 0 0; padding:0; }
+  li { display:flex; justify-content:space-between; align-items:center; gap:8px; padding: 8px 0; border-top:1px solid var(--line); }
+  li small { color: var(--mut); }
+  #msg { min-height: 20px; margin: 8px 0 0; color: var(--mut); }
+  .err { color: var(--bad) !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Backup Lab</h1>
+  <p class="sub">App mínima con PostgreSQL para demostrar backups lógicos con pg_dump y restauración con pg_restore.</p>
+
+  <section>
+    <h2>1. Datos de ejemplo (notas)</h2>
+    <div class="row">
+      <input id="titulo" placeholder="Escribe una nota y pulsa Agregar" maxlength="200">
+      <button onclick="addNota()">Agregar</button>
+    </div>
+    <ul id="notas"></ul>
+  </section>
+
+  <section>
+    <h2>2. Backups</h2>
+    <div class="row">
+      <input id="token" type="password" placeholder="Token de administrador (ADMIN_TOKEN)">
+      <button onclick="crearBackup()">Crear backup ahora</button>
+      <button class="sec" onclick="cargarBackups()">Actualizar lista</button>
+    </div>
+    <ul id="backups"></ul>
+    <p id="msg"></p>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const hdr = () => ({ 'X-Admin-Token': $('token').value, 'Content-Type': 'application/json' });
+function say(t, err=false){ $('msg').textContent = t; $('msg').className = err ? 'err' : ''; }
+function esc(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function cargarNotas(){
+  const r = await fetch('/api/notas'); const d = await r.json();
+  $('notas').innerHTML = d.map(n => `<li><span>${esc(n.titulo)} <small>#${n.id}</small></span>
+    <button class="del" onclick="borrarNota(${n.id})">Borrar</button></li>`).join('') || '<li><small>Sin notas todavía.</small></li>';
+}
+async function addNota(){
+  const t = $('titulo').value.trim(); if(!t) return;
+  await fetch('/api/notas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({titulo:t})});
+  $('titulo').value=''; cargarNotas();
+}
+async function borrarNota(id){ await fetch('/api/notas/'+id, {method:'DELETE'}); cargarNotas(); }
+
+async function cargarBackups(){
+  const r = await fetch('/api/backups', {headers: hdr()});
+  if(!r.ok){ say('No se pudo listar: ' + (await r.json()).detail, true); return; }
+  const d = await r.json();
+  $('backups').innerHTML = d.map(b => `<li><span>${b.nombre} <small>${(b.bytes/1024).toFixed(1)} KB</small></span>
+    <span><button class="sec" onclick="descargar('${b.nombre}')">Descargar</button>
+    <button onclick="restaurar('${b.nombre}')">Restaurar</button></span></li>`).join('') || '<li><small>Aún no hay backups.</small></li>';
+  say('');
+}
+async function crearBackup(){
+  say('Creando backup…');
+  const r = await fetch('/api/backups', {method:'POST', headers: hdr()});
+  if(!r.ok){ say((await r.json()).detail, true); return; }
+  say('Backup creado.'); cargarBackups();
+}
+async function descargar(n){
+  const r = await fetch('/api/backups/'+n, {headers: hdr()});
+  if(!r.ok){ say('No se pudo descargar', true); return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = n; a.click();
+}
+async function restaurar(n){
+  if(!confirm('Esto reemplaza los datos actuales con los de '+n+'. ¿Continuar?')) return;
+  const r = await fetch('/api/backups/'+n+'/restore', {method:'POST', headers: hdr()});
+  if(!r.ok){ say((await r.json()).detail, true); return; }
+  say('Restauración completada desde '+n+'.'); cargarNotas();
+}
+cargarNotas();
+</script>
+</body>
+</html>
