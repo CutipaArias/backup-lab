@@ -1,11 +1,10 @@
 # Blueprint de Render: crea la base de datos y el servicio web.
-# autoDeploy está en false a propósito: el despliegue lo dispara GitHub Actions
-# (con un Deploy Hook) solo cuando las pruebas pasan.
+# El despliegue lo hace Render solo cuando pasan los checks de GitHub Actions.
 databases:
   - name: backuplab-db
     plan: free
     postgresMajorVersion: "17"
-    ipAllowList:            # acceso externo para el backup programado de GitHub Actions
+    ipAllowList:
       - source: 0.0.0.0/0
         description: GitHub Actions (IPs variables)
 
@@ -14,7 +13,7 @@ services:
     name: backuplab
     runtime: docker
     plan: free
-    autoDeploy: false
+    autoDeployTrigger: checksPass
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
