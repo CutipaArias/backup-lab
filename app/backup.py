@@ -26,7 +26,19 @@ def create_backup() -> dict:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     name = datetime.now(timezone.utc).strftime("backup_%Y%m%d_%H%M%S.dump")
     path = BACKUP_DIR / name
-    _run(["pg_dump", "--format=custom", "--no-owner", "--file", str(path), database_url()])
+    # --no-owner y --no-acl: en bases administradas (Render) el usuario de la app
+    # no puede reasignar dueños ni permisos por defecto al restaurar.
+    _run(
+        [
+            "pg_dump",
+            "--format=custom",
+            "--no-owner",
+            "--no-acl",
+            "--file",
+            str(path),
+            database_url(),
+        ]
+    )
     _apply_retention()
     return _describe(path)
 
@@ -75,9 +87,9 @@ def restore_backup(name: str) -> None:
             "--clean",
             "--if-exists",
             "--no-owner",
+            "--no-acl",
             "--dbname",
             database_url(),
             str(path),
         ]
     )
- 
